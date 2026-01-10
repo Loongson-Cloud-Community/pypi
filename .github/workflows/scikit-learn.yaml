@@ -26,8 +26,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [loongarch64-abi2.0]
-        platform: ["manylinux"]
-        python: ["310", "311", "312", "313"]
+        platform: ["manylinux", "musllinux"]
+        python: ["311", "312", "313", "313t", "314", "314t"]
 
     steps:
       - name: Check if exists
@@ -83,11 +83,10 @@ jobs:
         env:
           RUNNER_OS: Linux
           PIP_INDEX_URL: "https://lpypi.loongnix.cn/loongson/pypi/+simple"
-          PIP_EXTRA_INDEX_URL: "https://pypi.tuna.tsinghua.edu.cn/simple"
-          CIBW_PRERELEASE_PYTHONS: ${{ matrix.prerelease_pythons }}
-          CIBW_FREE_THREADED_SUPPORT: ${{ matrix.free_threaded_support }}
+          PIP_EXTRA_INDEX_URL: "https://mirrors.loong64.com/pypi/simple"
           CIBW_ENVIRONMENT_LINUX: SKLEARN_SKIP_NETWORK_TESTS=1
           CIBW_BUILD: cp${{ matrix.python }}-${{ matrix.platform }}_loongarch64
+          CIBW_ENABLE: cpython-freethreading
           CIBW_ARCHS: loongarch64
           CIBW_BEFORE_BUILD: bash {project}/build_tools/wheels/cibw_before_build.sh {project}
           CIBW_ENVIRONMENT_PASS_LINUX: |
@@ -96,7 +95,9 @@ jobs:
             PIP_EXTRA_INDEX_URL
           CIBW_BUILD_VERBOSITY: 1
           CIBW_TEST_SKIP: "*"
-        run: build_tools/wheels/build_wheels.sh
+        run: |
+          pip3 install -i https://lpypi.loongnix.cn/loongson/pypi/+simple cibuildwheel==3.2.1
+          build_tools/wheels/build_wheels.sh
 
       - name: Upload wheels
         if: ${{ env.SKIP != 'true' }}
