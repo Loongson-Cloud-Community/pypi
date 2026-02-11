@@ -18,7 +18,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [loongarch64-abi2.0]
-        python: ["cp310", "cp311", "cp312", "cp313"]
+        python: ["cp311", "cp312", "cp313", "cp313t", "cp314", "cp314t"]
         platform: ["manylinux"]
     steps:
       - name: Check if exists
@@ -72,21 +72,39 @@ jobs:
       - name: Patch source
         if: ${{ env.SKIP != 'true' }}
         run: |
-          wget -qO - https://github.com/loong64/onnxruntime/raw/refs/heads/main/fix_strict_aliasing_quantize.patch | patch -p1
-          wget -qO cmake/vcpkg-ports/cpuinfo/cpuinfo_loong64.patch https://github.com/loong64/pytorch/raw/refs/heads/main/cpuinfo/cpuinfo_loong64.patch
+          wget -qO - https://github.com/loong64/onnxruntime/raw/refs/heads/main/patch_loong64.patch | patch -p1
+          wget -qO cmake/vcpkg-ports/cpuinfo/patch_cpuinfo_h_for_loong64.patch https://github.com/loong64/pytorch/raw/refs/heads/main/cpuinfo/cpuinfo_loong64.patch
         env:
           HTTPS_PROXY: ${{ secrets.PROXY_URL }}
 
       - name: Build wheel
         if: ${{ env.SKIP != 'true' }}
         run: |
+          mkdir -p "${HOME}/data/build"
+          DEVICE=CPU
+          BUILD_CONFIG=Release
+          DOCKER_SCRIPT_OPTIONS=("-d" "${DEVICE}" "-c" "${BUILD_CONFIG}")
+          PYTHON_VERSION=${{ matrix.python }}
+          if [ "${PYTHON_VERSION}" = "cp313t" ] || [ "${PYTHON_VERSION}" = "cp314t" ]; then
+            PYTHON_VERSION=${PYTHON_VERSION%t}
+          fi
+          PYTHON_EXES="/opt/python/${PYTHON_VERSION}-${{ matrix.python }}/bin/python"
+          if [ "${PYTHON_EXES}" != "" ] ; then
+            DOCKER_SCRIPT_OPTIONS+=("-p" "${PYTHON_EXES}")
+          fi
+          BUILD_EXTR_PAR='--use_binskim_compliant_compile_flags --build_wheel --cmake_extra_defines onnxruntime_BUILD_BENCHMARKS=ON'
+          if [ "${BUILD_EXTR_PAR}" != "" ] ; then
+            DOCKER_SCRIPT_OPTIONS+=("-x" "${BUILD_EXTR_PAR}")
+          fi
+          DOCKER_IMAGE="ghcr.io/loong64/onnxruntimecpubuildpythonloongarch64:${{ env.VERSION }}"
+
           docker run --rm \
-            --volume $(pwd):/onnxruntime_src \
-            --workdir /onnxruntime_src \
-            --env ALLOW_RELEASED_ONNX_OPSET_ONLY=0 \
-            --env https_proxy=${{ secrets.PROXY_URL }} \
-            ghcr.io/loong64/onnxruntimecpubuildpythonloongarch64:${{ env.VERSION }} \
-            /bin/bash -c 'PATH=/opt/python/${{ matrix.python }}-${{ matrix.python }}/bin:$PATH && python3 -m pip install --user -r tools/ci_build/github/linux/python/requirements.txt && python3 tools/ci_build/build.py --build_dir build/Release --config Release --cmake_generator Ninja --skip_submodule_sync --skip_tests --build_shared_lib --parallel --use_cache --use_vcpkg --use_vcpkg_ms_internal_asset_cache --use_binskim_compliant_compile_flags --build_wheel --cmake_extra_defines onnxruntime_BUILD_BENCHMARKS=ON && auditwheel repair -w wheelhouse build/Release/Release/dist/*.whl'
+            --platform linux/loong64 \
+            --volume "$(pwd):/onnxruntime_src" \
+            --volume "${HOME}/data/build:/build" \
+            -w /onnxruntime_src \
+            -e ALLOW_RELEASED_ONNX_OPSET_ONLY=0 \
+            "$DOCKER_IMAGE" tools/ci_build/github/linux/build_linux_python_package.sh "${DOCKER_SCRIPT_OPTIONS[@]}"
 
       - name: Upload wheels
         if: ${{ env.SKIP != 'true' }}
