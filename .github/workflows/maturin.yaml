@@ -67,10 +67,6 @@ jobs:
           repository: PyO3/maturin 
           ref: ${{ env.version }}
 
-      - name: Patch source
-        run: |
-          curl -sL https://github.com/loong64/maturin/raw/refs/heads/main/patch-loong64.patch | patch -p1
-        
   build:
     name: Build maturin ${{ matrix.platform }} wheel on ${{ matrix.os }}
     needs: [check-wheel-exists, download]
