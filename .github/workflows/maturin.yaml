@@ -19,7 +19,7 @@ on:
 env:
   PACKAGE_NAME: maturin
 jobs:
-  check-wheel-exists:
+  check:
     name: Check if exists
     runs-on: ubuntu-latest
     outputs:
@@ -72,7 +72,7 @@ jobs:
         RUSTUP_HOME: /root/.rustup
         CARGO_HOME: /root/.cargo
         CARGO_PROFILE_RELEASE_LTO: "${{ matrix.platform.lto || 'fat' }}"
-      steps:
+    steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           repository: PyO3/maturin
