@@ -1,0 +1,176 @@
+name: build primp wheel
+
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  pull_request:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/primp.yaml"
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/primp.yaml"
+  workflow_dispatch:
+    inputs:
+      version:
+        required: false
+        default: 'latest'
+
+env:
+  PACKAGE: primp
+
+jobs:
+  check:
+    name: Check if exists
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      build: ${{ steps.check.outputs.build }}
+    steps:
+      - name: Check if wheels exist
+        id: check
+        run: |
+          pkg=${{ env.PACKAGE }}
+
+          check_wheel() {
+
+            if curl -Ls "${url}" | grep -q "${pkg}-${version}.*loongarch64"; then
+              echo "build=false" >> $GITHUB_OUTPUT
+              echo "wheel already exists."
+            else
+              echo "build=true" >> $GITHUB_OUTPUT
+              echo "wheel not found, continue building."
+            fi
+
+          }
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="${{ github.event.inputs.version }}"
+          else
+            version="latest"
+          fi
+
+          url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
+          upstream_url="https://pypi.org/pypi/${pkg}/json"
+
+          if [[ "${version}" == "latest" ]]; then
+            version="$(curl -s ${upstream_url} | jq -r '.info.version')"
+          fi
+
+          echo "version=v${version}" >> $GITHUB_OUTPUT
+
+          check_wheel
+
+  linux:
+    name: Build ${{ matrix.platform.target }} wheel
+    needs: [check]
+    runs-on: ${{ matrix.platform.runner }}
+    if: needs.check.outputs.build == 'true'
+    strategy:
+      matrix:
+        platform:
+          - runner: ubuntu-22.04
+            target: loongarch64
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: deedy5/primp
+          ref: ${{ needs.check.outputs.version }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: 3.x
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-${{ matrix.platform.target }}
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --manifest-path crates/primp-python/Cargo.toml
+          manylinux: auto
+          maturin-version: 1.12.4
+
+      - name: Build free-threaded wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist -i python3.14t --manifest-path crates/primp-python/Cargo.toml
+          manylinux: auto
+          maturin-version: 1.12.4
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE }}_${{ github.sha }}
+          path: ./dist/*.whl
+
+  musllinux:
+    needs: [check]
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - runner: ubuntu-22.04
+            target: loongarch64
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: deedy5/primp
+          ref: ${{ needs.check.outputs.version }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v6
+        with:
+          python-version: 3.x
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: musllinux-${{ matrix.platform.target }}
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --manifest-path crates/primp-python/Cargo.toml
+          manylinux: musllinux_1_2
+          maturin-version: 1.12.4
+      - name: Build free-threaded wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist -i python3.14t --manifest-path crates/primp-python/Cargo.toml
+          manylinux: musllinux_1_2
+          maturin-version: 1.12.4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE }}_musllinux_${{ github.sha }}
+          path: ./dist/*.whl
+
+  upload:
+    needs: [check, linux, musllinux]
+    runs-on: loongarch64-abi2.0
+    if: needs.check.outputs.build == 'true' && github.event_name != 'pull_request'
+
+    steps:
+      - name: Clean workspace
+        run: safe-rm -rf * .*
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ env.PACKAGE }}_*
+          path: dist
+          merge-multiple: true
+
+      - name: Upload wheel
+        run: |
+          ls dist/*.whl || exit 1
+          pip install twine==6.0.1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi dist/*.whl
+        env:
+          TWINE_USERNAME: ${{ secrets.INDEX_NAME  }}
+          TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}
