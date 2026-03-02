@@ -1,0 +1,126 @@
+name: build datrie wheel
+
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  pull_request:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/datrie.yaml"
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/datrie.yaml"
+  workflow_dispatch:
+    inputs:
+      version:
+        required: false
+        default: 'latest'
+env:
+  PACKAGE: datrie
+jobs:
+  build:
+    name: Build datrie ${{ matrix.platform }} wheel on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    outputs:
+      upload: ${{ steps.check.outputs.upload }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: loongarch64
+            platform: "manylinux"
+            build: "*manylinux*"
+
+          - os: ubuntu-24.04
+            arch: loongarch64
+            platform: "musllinux"
+            build: "*musllinux*"
+
+    steps:
+      - name: Check if exists
+        id: check
+        run: |
+          pkg=${{ env.PACKAGE }}
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="${{ github.event.inputs.version }}"
+          else
+            version="latest"
+          fi
+
+          platform="${{ matrix.platform }}"
+          url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
+          upstream_url="https://pypi.org/pypi/${pkg}/json"
+
+          if [[ "${version}" == "latest" ]]; then
+            version="$(curl -s ${upstream_url} | jq -r '.info.version')"
+          fi
+
+          if curl -Ls ${url} | grep -q datrie-${version}.*-${platform}.*loongarch64; then
+            echo "SKIP=true" >> $GITHUB_ENV
+            echo "upload=false" >> $GITHUB_OUTPUT
+            echo "${platform} wheels already exists."
+          else
+            echo "SKIP=false" >> $GITHUB_ENV
+            echo "upload=true" >> $GITHUB_OUTPUT
+            echo "${platform} wheels not found, continue building"
+          fi
+
+          echo "VERSION=${version}" >> $GITHUB_ENV
+
+      - name: Download source
+        if: ${{ env.SKIP != 'true' }}
+        uses: actions/checkout@v4
+        with: 
+          repository: pytries/datrie
+          ref: ${{ env.VERSION }}
+          fetch-depth: 0
+          submodules: true
+
+      - uses: astral-sh/setup-uv@v7
+        if: ${{ env.SKIP != 'true' }}
+
+      - name: Setup QEMU
+        if: ${{ env.SKIP != 'true' }}
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build wheel
+        if: ${{ env.SKIP != 'true' }}
+        uses: loong64/cibuildwheel@v3.3.1
+        env:
+          CIBW_BUILD: ${{ matrix.build }}
+          CIBW_ARCHS: ${{ matrix.arch }}
+          PIP_INDEX_URL: "https://lpypi.loongnix.cn/loongson/pypi/+simple"
+          CIBW_ENVIRONMENT_PASS_LINUX: PIP_INDEX_URL
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE }}_${{ matrix.platform }}_${{ github.sha }}
+          path: wheelhouse/*
+
+
+  upload:
+    needs: [build]
+    runs-on: loongarch64-abi2.0
+    if: needs.build.outputs.upload == 'true' && github.event_name != 'pull_request'
+
+    steps:
+      - name: Clean workspace
+        run: safe-rm -rf * .*
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ env.PACKAGE }}_*
+          path: wheelhouse
+          merge-multiple: true
+
+      - name: Upload wheels
+        run: |
+          ls wheelhouse/*.whl || exit 1
+          pip install twine==6.0.1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*-${{ matrix.platform }}_*.whl
+        env:
+          TWINE_USERNAME: ${{ secrets.INDEX_NAME }}
+          TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}
