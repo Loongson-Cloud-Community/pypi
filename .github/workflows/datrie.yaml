@@ -120,7 +120,7 @@ jobs:
         run: |
           ls wheelhouse/*.whl || exit 1
           pip install twine==6.0.1
-          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*-${{ matrix.platform }}_*.whl
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*.whl
         env:
           TWINE_USERNAME: ${{ secrets.INDEX_NAME }}
           TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}
