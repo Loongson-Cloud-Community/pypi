@@ -79,8 +79,8 @@ jobs:
       - name: Upload wheels
         if: ${{ env.SKIP != 'true' }}
         run: |
-          ls wheelhouse/*${{ matrix.python }}-${{ matrix.platform }}_*.whl || exit 1
-          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*${{ matrix.python }}-${{ matrix.platform }}_*.whl
+          ls wheelhouse/*${{ matrix.python }}-*.whl || exit 1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*${{ matrix.python }}-*.whl
         env:
           TWINE_USERNAME: ${{ secrets.INDEX_NAME }}
           TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}
