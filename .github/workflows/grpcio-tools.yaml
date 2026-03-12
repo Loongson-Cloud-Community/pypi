@@ -3,6 +3,14 @@ name: build grpcio-tools wheel
 on:
   schedule:
     - cron: '0 17 * * *'
+  pull_request:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/grpcio-tools.yaml"
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/grpcio-tools.yaml"
   workflow_dispatch:
     inputs:
       version:
@@ -11,28 +19,24 @@ on:
 env:
   PACKAGE: grpcio-tools
 jobs:
-  build:
-    name: Build grpcio-tools ${{ matrix.python }} ${{ matrix.platform }} wheel on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [loongarch64-abi2.0]
-        python: ["cp38", "cp39", "cp310", "cp311", "cp312", "cp313"]
-        platform: ["manylinux", "musllinux"]
+  check:
+    name: Check if wheel exists
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+      version: ${{ steps.check.outputs.version }}
     steps:
       - name: Check if exists
+        id: check
         run: |
           pkg=${{ env.PACKAGE }}
-          python_tag=${{ matrix.python }}
 
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
-            version="latest"
-          else
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             version="${{ github.event.inputs.version }}"
+          else
+            version="latest"
           fi
 
-          platform="${{ matrix.platform }}"
           url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
           upstream_url="https://pypi.org/pypi/${pkg}/json"
 
@@ -40,33 +44,41 @@ jobs:
             version="$(curl -s ${upstream_url} | jq -r '.info.version')"
           fi
 
-          if curl -Ls ${url} | grep -q grpcio_tools-${version}-${python_tag}.*${platform}.*loongarch64; then
-            echo "SKIP=true" >> $GITHUB_ENV
+          if curl -Ls ${url} | grep -q grpcio_tools-${version}.*loongarch64; then
+            echo "build=false" >> $GITHUB_OUTPUT
             echo "${platform} wheels already exists."
           else
-            echo "SKIP=false" >> $GITHUB_ENV
+            echo "build=true" >> $GITHUB_OUTPUT
             echo "${platform} wheels not found, continue building"
           fi
 
           echo "VERSION=${version}" >> $GITHUB_ENV
 
-      - name: Clean workspace
-        if: ${{ env.SKIP != 'true' }}
-        run: |
-          safe-rm -rf * .*
+  build:
+    needs: [check]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04]
+        python: ["cp310", "cp311", "cp312", "cp313", "cp314"]
+        platform: ["manylinux", "musllinux"]
+    if: needs.check.outputs.build == 'true'
 
-      - name: Download source
-        if: ${{ env.SKIP != 'true' }}
-        uses: Loongson-Cloud-Community/pypi@main
+    steps:
+      - uses: Loongson-Cloud-Community/pypi@main
         with:
           name: ${{ env.PACKAGE }}
           version: ${{ env.VERSION }}
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: docker/setup-qemu-action@v3
 
       - name: Build wheel
-        if: ${{ env.SKIP != 'true' }}
-        run: |
-          pip3 install -i https://lpypi.loongnix.cn/loongson/pypi/+simple cibuildwheel==2.22.0
-          cibuildwheel
+        uses: loong64/cibuildwheel@v3.3.1
         env:
           PIP_INDEX_URL: "https://lpypi.loongnix.cn/loongson/pypi/+simple"
           CIBW_ARCHS: "loongarch64"
@@ -76,11 +88,31 @@ jobs:
           CIBW_ENVIRONMENT_PASS_LINUX: >
             PIP_INDEX_URL
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE }}-${{ env.VERSION }}-${{ matrix.python }}-${{ matrix.platform }}
+          path: wheelhouse/*
+
+  upload:
+    needs: [build]
+    runs-on: ubuntu-24.04
+    if: needs.build.outputs.upload == 'true' && github.event_name != 'pull_request'
+    
+    steps:
+      - name: Clean workspace
+        run: safe-rm -rf * .*
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ env.PACKAGE }}-*
+          path: wheelhouse
+          merge-multiple: true
+
       - name: Upload wheels
-        if: ${{ env.SKIP != 'true' }}
         run: |
-          ls wheelhouse/*${{ matrix.python }}-*.whl || exit 1
-          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*${{ matrix.python }}-*.whl
+          ls wheelhouse/*.whl || exit 1
+          pip install twine==6.0.1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*.whl
         env:
           TWINE_USERNAME: ${{ secrets.INDEX_NAME }}
           TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}
