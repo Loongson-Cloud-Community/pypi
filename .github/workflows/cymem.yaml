@@ -67,7 +67,7 @@ jobs:
         uses: Loongson-Cloud-Community/pypi@main
         with:
           name: ${{ env.PACKAGE }}
-          version: ${{ env.VERSION }}
+          version: ${{ needs.check.outputs.version }}
 
       - uses: actions/setup-python@v5
         with:
