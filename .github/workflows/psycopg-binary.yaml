@@ -3,6 +3,10 @@ name: build psycopg-binary wheel
 on:
   schedule:
     - cron: '0 17 * * *'
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/psycopg-binary.yaml"
   workflow_dispatch:
     inputs:
       version:
@@ -11,8 +15,8 @@ on:
 env:
   PACKAGE: psycopg_binary
   REPOSITORY: psycopg/psycopg
-  LIBPQ_VERSION: "17.5"
-  OPENSSL_VERSION: "3.5.0"
+  LIBPQ_VERSION: "18.0"
+  OPENSSL_VERSION: "3.5.4"
 
 jobs:
 
@@ -24,16 +28,16 @@ jobs:
       matrix:
         os: [loongarch64-abi2.0]
         platform: [manylinux, musllinux]
-        pyver: [cp38, cp39, cp310, cp311, cp312, cp313]
+        pyver: [cp310, cp311, cp312, cp313]
     steps:
       - name: Check if exists
         run: |
           pkg=${{ env.PACKAGE }}
 
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
-            version="latest"
-          else
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             version="${{ github.event.inputs.version }}"
+          else
+            version="latest"
           fi
 
           platform="${{ matrix.platform }}"
@@ -70,7 +74,7 @@ jobs:
 
       - name: Create the binary package source tree
         if: ${{ env.SKIP != 'true' }}
-        run: python3 ./tools/build/copy_to_binary.py
+        run: python3 ./tools/ci/copy_to_binary.py
 
       - name: Build wheel
         if: ${{ env.SKIP != 'true' }}
@@ -84,15 +88,16 @@ jobs:
           CIBW_BEFORE_ALL_LINUX: |
             if command -v yum >/dev/null 2>&1; then
               source /etc/os-release && 
-              sed -i "s/centos/$ID/g" tools/build/build_libpq.sh &&
-              sed -i "s/pam-devel/pam-devel perl/g" tools/build/build_libpq.sh &&
-              sed -i "s/centos/$ID/g" tools/build/print_so_versions.sh &&
-              sed -i "s/centos/$ID/g" tools/build/wheel_linux_before_all.sh
+              sed -i "s/centos/$ID/g" tools/ci/build_libpq.sh &&
+              sed -i "s/pam-devel/pam-devel perl/g" tools/ci/build_libpq.sh &&
+              sed -i "s/centos/$ID/g" tools/ci/print_so_versions.sh &&
+              sed -i "/build_libpq.sh/s| > /dev/null||" tools/ci/wheel_linux_before_all.sh &&
+              sed -i "s/centos/$ID/g" tools/ci/wheel_linux_before_all.sh
             fi
-            ./tools/build/wheel_linux_before_all.sh
+            ./tools/ci/wheel_linux_before_all.sh
           CIBW_REPAIR_WHEEL_COMMAND: >-
-            export LD_LIBRARY_PATH="$LIBPQ_BUILD_PREFIX/lib"
-            && ./tools/build/strip_wheel.sh {wheel}
+            export LD_LIBRARY_PATH="$LIBPQ_BUILD_PREFIX/lib:$LIBPQ_BUILD_PREFIX/lib64"
+            && ./tools/ci/strip_wheel.sh {wheel}
             && auditwheel repair -w {dest_dir} {wheel}
           CIBW_TEST_SKIP: "*"
           CIBW_ENVIRONMENT_PASS_LINUX: LIBPQ_VERSION OPENSSL_VERSION PIP_INDEX_URL
@@ -100,7 +105,6 @@ jobs:
             PACKAGE_IMPL=binary
             LIBPQ_BUILD_PREFIX=/host/tmp/libpq.build-${{ matrix.platform }}-${{ env.LIBPQ_VERSION }}
             PATH="$LIBPQ_BUILD_PREFIX/bin:$PATH"
-            HTTPS_PROXY=${{ secrets.PROXY_URL }}
 
       - name: Upload wheels
         if: ${{ env.SKIP != 'true' }}
