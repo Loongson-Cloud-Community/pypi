@@ -1,0 +1,117 @@
+name: build py-spy wheel
+
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  pull_request:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/py-spy.yaml"
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/py-spy.yaml"
+  workflow_dispatch:
+    inputs:
+      version:
+        required: false
+        default: 'latest'
+env:
+  PACKAGE_NAME: py-spy
+jobs:
+  check:
+    name: Check if exists
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      build: ${{ steps.check.outputs.build }}
+    steps:
+      - name: Check if wheels exist
+        id: check
+        run: |
+          pkg=${{ env.PACKAGE_NAME }}
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="${{ github.event.inputs.version }}"
+          else
+            version="latest"
+          fi
+
+          url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
+          upstream_url="https://pypi.org/pypi/${pkg}/json"
+
+          if [[ "${version}" == "latest" ]]; then
+            version="$(curl -s ${upstream_url} | jq -r '.info.version')"
+          fi
+
+          if curl -Ls "${url}" | grep -q "${pkg}-${version}.*loongarch64"; then
+            echo "wheel has already exist"
+            echo "build=false" >> $GITHUB_OUTPUT
+          else
+            echo "wheel not found, continue building."
+            echo "build=true" >> $GITHUB_OUTPUT
+          fi
+
+          echo "version=v${version}" >> $GITHUB_OUTPUT
+
+  build:
+    name: Build ${{ matrix.platform.target }}
+    needs: [check]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - target: "loongarch64-unknown-linux-musl"
+            image: "rust-musl-cross:loongarch64-musl"
+    container:
+      image: docker://ghcr.io/rust-cross/${{ matrix.platform.image }}
+      env:
+        RUSTUP_HOME: /root/.rustup
+        CARGO_HOME: /root/.cargo
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          repository: benfred/py-spy
+          ref: ${{ needs.check.outputs.version }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Patch
+        run: |
+          curl -fsSL https://github.com/Loongson-Cloud-Community/py-spy/raw/dev/0001-fix-stale-empty-thread-names.patch | patch -p1
+
+      - name: Build
+        run: |
+          python3 -m pip install --upgrade maturin
+          maturin build --release -o dist --target ${{ matrix.platform.target }}
+          maturin sdist -o dist
+      - name: Rename Wheels
+        run: |
+          python3 -c "import shutil; import glob; wheels = glob.glob('dist/*.whl'); [shutil.move(wheel, wheel.replace('py3', 'py2.py3')) for wheel in wheels if 'py2' not in wheel]"
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE_NAME }}_${{ needs.check.outputs.version }}_${{ github.sha }}
+          path: ./dist/*.whl
+
+  upload:
+    needs: [check, build]
+    runs-on: loongarch64-abi2.0
+    if: needs.check.outputs.build == 'true' && github.event_name != 'pull_request'
+
+    steps:
+      - name: Clean workspace
+        run: safe-rm -rf * .*
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PACKAGE_NAME }}_${{ needs.check.outputs.version }}_${{ github.sha }}
+          path: dist
+
+      - name: Upload wheel
+        run: |
+           ls dist/*.whl || exit 1
+           pip install twine==6.0.1
+           twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi dist/*.whl
+        env:
+          TWINE_USERNAME: ${{ secrets.INDEX_NAME  }}
+          TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}
