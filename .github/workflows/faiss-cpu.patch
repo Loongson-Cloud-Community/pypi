@@ -1,0 +1,34 @@
+diff --git a/.github/workflows/faiss-cpu.yaml b/.github/workflows/faiss-cpu.yaml
+index daaffaf..71ef13d 100644
+--- a/.github/workflows/faiss-cpu.yaml
++++ b/.github/workflows/faiss-cpu.yaml
+@@ -3,13 +3,28 @@ name: build faiss-cpu wheel
+ on:
+   schedule:
+     - cron: '0 17 * * *'
++  pull_request:
++    branches: ["main"]
++    paths:
++      - ".github/workflows/faiss-cpu.yaml"
++  push:
++    branches: ["main"]
++    paths:
++      - ".github/workflows/faiss-cpu.yaml"
+   workflow_dispatch:
+     inputs:
+       version:
+         required: false
+         default: 'latest'
+-
++env:
++  PACKAGE: faiss-cpu
+ jobs:
++  check:
++    name: Check if wheel exists
++    runs-on: ubuntu-latest
++    outputs:
++      build: ${{ steps.check.outputs.build }}
++      version: ${{ steps.check.outputs.version }}
+   build:
+     name: Build faiss-cpu wheel on ${{ matrix.os }}
+     runs-on: ${{ matrix.os }}

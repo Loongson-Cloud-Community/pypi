@@ -44,7 +44,7 @@ jobs:
             version="$(curl -s ${upstream_url} | jq -r '.info.version')"
           fi
 
-          if curl -Ls "${url}" | grep -q "${pkg}-${version}.*loongarch64"; then
+          if curl -Ls "${url}" | grep -q "py_spy-${version}.*loongarch64"; then
             echo "wheel has already exist"
             echo "build=false" >> $GITHUB_OUTPUT
           else
@@ -58,6 +58,7 @@ jobs:
     name: Build ${{ matrix.platform.target }}
     needs: [check]
     runs-on: ubuntu-latest
+    if: needs.check.outputs.build == 'true'
     strategy:
       fail-fast: false
       matrix:
