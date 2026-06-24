@@ -70,7 +70,7 @@ jobs:
           -e '#elif defined(__loongarch_lp64)\' \
           -e '#define OPENSSL_64_BIT\' \
           -e '#define OPENSSL_LOONGARCH64' \
-          third_party/boringssl-with-bazel/src/include/openssl/target.h
+          third_party/boringssl-with-bazel/include/openssl/target.h
 
       - name: Build wheel
         if: ${{ env.SKIP != 'true' }}
