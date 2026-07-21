@@ -8,20 +8,22 @@ on:
       version:
         required: false
         default: 'latest'
-
+env:
+  PACKAGE: torch
 jobs:
   build:
-    name: Build torch ${{ matrix.platform }} wheel on loongarch64
+    name: Build torch ${{ matrix.python }} ${{ matrix.platform }} wheel on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [loongarch64-abi2.0]
-        platform: ["cp39-manylinux", "cp310-manylinux", "cp311-manylinux", "cp312-manylinux", "cp313-manylinux"]
+        python: ["cp310", "cp311", "cp312", "cp313", "cp313t", "cp314", "cp314t"]
+        platform: ["manylinux"]
     steps:
       - name: Check if exists
         run: |
-          pkg=torch
+          pkg=${{ env.PACKAGE }}
 
           if [[ "${{ github.event_name }}" == "schedule" ]]; then
             version="latest"
@@ -29,6 +31,7 @@ jobs:
             version="${{ github.event.inputs.version }}"
           fi
 
+          python_tag="${{ matrix.python }}"
           platform="${{ matrix.platform }}"
           url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
           upstream_url="https://pypi.org/pypi/${pkg}/json"
@@ -37,7 +40,7 @@ jobs:
             version="$(curl -s ${upstream_url} | jq -r '.info.version')"
           fi
 
-          if curl -Ls ${url} | grep -q ${pkg}-${version}-.*${platform}.*loongarch64; then
+          if curl -Ls ${url} | grep -q ${pkg}-${version#v}-.*${python_tag}-${platform}.*loongarch64; then
             echo "SKIP=true" >> $GITHUB_ENV
             echo "${platform} wheels already exists."
           else
@@ -46,6 +49,11 @@ jobs:
           fi
 
           echo "VERSION=v${version}" >> $GITHUB_ENV
+          echo "PYTORCH_BUILD_NUMBER=1" >> $GITHUB_ENV
+          echo "PYTORCH_BUILD_VERSION=${version}" >> $GITHUB_ENV
+
+          DESIRED_PYTHON=$(echo '${{ matrix.python }}' | sed 's/cp//; s/\([0-9]\)/\1./')
+          echo "DESIRED_PYTHON=${DESIRED_PYTHON}" >> $GITHUB_ENV
 
       - name: Clean workspace
         if: ${{ env.SKIP != 'true' }}
@@ -54,50 +62,71 @@ jobs:
 
       - name: Download source
         if: ${{ env.SKIP != 'true' }}
-        run: |
-          version=${{ env.VERSION }}
-          wget -qO - https://github.com/pytorch/pytorch/releases/download/${version}/pytorch-${version}.tar.gz | tar xz --strip-components=1
+        uses: actions/checkout@v4
+        with:
+          repository: pytorch/${{ env.PACKAGE }}
+          ref: ${{ env.VERSION }}
+          submodules: true
+          fetch-depth: 2
 
-          if [ ! -f ".ci/docker/ci_commit_pins/nccl-cu12.txt" ]; then
-            mkdir -p .ci/docker/ci_commit_pins
-            wget -qO .ci/docker/ci_commit_pins/nccl-cu12.txt https://github.com/pytorch/pytorch/raw/refs/tags/${version}/.ci/docker/ci_commit_pins/nccl-cu12.txt
-          fi
+      - name: Set permissions
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          mkdir -p wheelhouse
+          chmod 777 wheelhouse
+
+      - name: Patch source
+        if: ${{ env.SKIP != 'true' }}
+        run: |
+          wget -qO - https://github.com/loong64/pytorch/raw/refs/heads/main/patch_loong64.patch | patch -p1
 
           cd third_party/sleef
           wget -qO - https://github.com/loong64/pytorch/raw/refs/heads/main/sleef/sleef_loong64.patch | patch -p1
-          
-          cd ../cpuinfo
-          wget -qO - https://github.com/loong64/pytorch/raw/refs/heads/main/cpuinfo/cpuinfo_loong64.patch | patch -p1 
+          cd -
 
-          echo "PYTORCH_BUILD_VERSION=${version/v/}" >> $GITHUB_ENV
+          cd third_party/cpuinfo
+          wget -qO - https://github.com/loong64/pytorch/raw/refs/heads/main/cpuinfo/cpuinfo_loong64.patch | patch -p1
+          cd -
         env:
           HTTPS_PROXY: ${{ secrets.PROXY_URL }}
 
       - name: Build wheel
         if: ${{ env.SKIP != 'true' }}
+        env: 
+          PYTORCH_ROOT: /pytorch
+          PACKAGE_TYPE: manywheel
+          DESIRED_CUDA: cpu
+          GPU_ARCH_TYPE: cpu-loongarch64
+          DOCKER_IMAGE: ghcr.io/loong64/manylinuxloongarch64-builder
+          DOCKER_IMAGE_TAG_PREFIX: cpu-loongarch64
+          DESIRED_PYTHON: "${{ env.DESIRED_PYTHON }}"
+          BUILD_ENVIRONMENT: linux-loongarch64-binary-manywheel
+          PYTORCH_FINAL_PACKAGE_DIR: /artifacts
         run: |
-          pip3 install -i https://lpypi.loongnix.cn/loongson/pypi/+simple cibuildwheel==2.22.0
-          cibuildwheel
-        env:
-          CIBW_MANYLINUX_LOONGARCH64_IMAGE: "ghcr.io/loong64/manylinuxloongarch64-builder:cpu-loongarch64"
-          CIBW_ARCHS: "loongarch64"
-          CIBW_BEFORE_BUILD: pip install -r requirements.txt
-          CIBW_BUILD: "${{ matrix.platform }}_loongarch64"
-          CIBW_SKIP: "pp*"
-          CIBW_TEST_SKIP: "*"
-          CIBW_ENVIRONMENT_LINUX: >
-            PIP_EXTRA_INDEX_URL="https://lpypi.loongnix.cn/loongson/pypi/+simple"
-            PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
-            BUILD_TEST=0
-            PYTORCH_BUILD_NUMBER=1
-            PYTORCH_BUILD_VERSION=${{ env.PYTORCH_BUILD_VERSION }}
-
+          DOCKER_CMD="${PYTORCH_ROOT}/.ci/manywheel/build.sh"
+          docker run --rm \
+            --platform linux/loong64 \
+            --env PYTORCH_ROOT \
+            --env PACKAGE_TYPE \
+            --env DESIRED_CUDA \
+            --env GPU_ARCH_TYPE \
+            --env SKIP_ALL_TESTS=1 \
+            --env DESIRED_PYTHON \
+            --env BUILD_ENVIRONMENT \
+            --env PYTORCH_BUILD_NUMBER \
+            --env PYTORCH_BUILD_VERSION \
+            --env PYTORCH_FINAL_PACKAGE_DIR \
+            --env PIP_EXTRA_INDEX_URL=https://lpypi.loongnix.cn/loongson/pypi/+simple \
+            --volume $(pwd):${PYTORCH_ROOT} \
+            --volume $(pwd)/wheelhouse:/${PYTORCH_FINAL_PACKAGE_DIR} \
+          ${DOCKER_IMAGE}:${DOCKER_IMAGE_TAG_PREFIX} \
+          sh -c "${DOCKER_CMD}"
 
       - name: Upload wheels
         if: ${{ env.SKIP != 'true' }}
         run: |
-          ls wheelhouse/*-${{ matrix.platform }}_*.whl || exit 1
-          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*-${{ matrix.platform }}_*.whl
+          ls wheelhouse/*-${{ matrix.python }}-${{ matrix.platform }}_*.whl || exit 1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*-${{ matrix.python }}-${{ matrix.platform }}_*.whl
         env:
           TWINE_USERNAME: ${{ secrets.INDEX_NAME  }}
           TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}
