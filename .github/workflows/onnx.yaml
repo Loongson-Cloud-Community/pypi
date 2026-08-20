@@ -3,35 +3,38 @@ name: build onnx wheel
 on:
   schedule:
     - cron: '0 17 * * *'
+  pull_request:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/onnx.yaml"
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/onnx.yaml"
   workflow_dispatch:
     inputs:
       version:
         required: false
         default: 'latest'
-
+env:
+  PACKAGE: onnx
 jobs:
-  build:
-    name: Build onnx wheel for ${{ matrix.python }}-${{ matrix.platform }}-${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [loongarch64-abi2.0]
-        platform: ["manylinux"]
-        python: ["cp39", "cp310", "cp311", "cp312", "cp313"]
+  check:
+    name: Check if wheel exists
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+      version: ${{ steps.check.outputs.version }}
     steps:
       - name: Check if exists
+        id: check
         run: |
-          pkg=onnx
-
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
-            version="latest"
-          else
+          pkg=${{ env.PACKAGE }}
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             version="${{ github.event.inputs.version }}"
+          else
+            version="latest"
           fi
-
-          platform="${{ matrix.platform }}"
-          python_tag="${{ matrix.python }}"
           url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
           upstream_url="https://pypi.org/pypi/${pkg}/json"
 
@@ -39,50 +42,98 @@ jobs:
             version="$(curl -s ${upstream_url} | jq -r '.info.version')"
           fi
 
-          if curl -s ${url} | grep -q ${pkg}-${version}-.*${python_tag}-${platform}.*loongarch64; then
-            echo "SKIP=true" >> $GITHUB_ENV
-            echo "${platform} wheels already exists."
+          if curl -Ls ${url} | grep -q ${pkg}-${version#v}-.*loongarch64; then
+            echo "build=false" >> $GITHUB_OUTPUT
+            echo "${pkg} wheel already exists."
           else
-            echo "SKIP=false" >> $GITHUB_ENV
-            echo "${platform} wheels not found, continue building"
+            echo "build=true" >> $GITHUB_OUTPUT
+            echo "${pkg} wheel not found, continue building."
           fi
+          echo "version=${version}" >> $GITHUB_OUTPUT
 
-          echo "VERSION=v${version}" >> $GITHUB_ENV
 
-      - name: Clean workspace
-        if: ${{ env.SKIP != 'true' }}
-        run: |
-          safe-rm -rf * .*
 
-      - name: Download source
-        if: ${{ env.SKIP != 'true' }}
-        uses: actions/checkout@v4
+  build:
+    name: Build wheels
+    needs: [check]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-24.04]
+    if: needs.check.outputs.build == 'true'
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: onnx/onnx
-          ref: ${{ env.VERSION }}
+          ref: v${{ needs.check.outputs.version }}
           submodules: true
 
-      - name: Build wheel
-        if: ${{ env.SKIP != 'true' }}
+      - name: Read protobuf version from sbom.cdx.json
+        run: echo "PROTOBUF_VERSION=$(jq -r '.components[] | select(.name=="protobuf") | .version' sbom.cdx.json)" >> $GITHUB_ENV
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Download protoc
         run: |
-          pip3 install -i https://lpypi.loongnix.cn/loongson/pypi/+simple cibuildwheel==3.0.0
-          cibuildwheel
+          ARCH=x86_64
+          curl -sSL "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOBUF_VERSION}/protoc-${PROTOBUF_VERSION}-linux-${ARCH}.zip" -o protoc.zip
+          unzip -q protoc.zip -d protoc-host
+          chmod +x protoc-host/bin/protoc
+
+      - name: Download protobuf source
+        run: |
+          curl -sSL "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOBUF_VERSION}/protobuf-${PROTOBUF_VERSION}.tar.gz" -o protobuf.tar.gz
+          tar -xf protobuf.tar.gz
+
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Build wheels
+        uses: loong64/cibuildwheel@v4.1.1
         env:
-          HTTPS_PROXY: ${{ secrets.PROXY_URL }} 
           PIP_INDEX_URL: "https://lpypi.loongnix.cn/loongson/pypi/+simple"
           CIBW_ARCHS: "loongarch64"
-          CIBW_BUILD: "${{ matrix.python }}-${{ matrix.platform }}_loongarch64"
-          CIBW_BUILD_VERBOSITY: 3
+          CIBW_BUILD: "*-manylinux_loongarch64"
+          CIBW_ENVIRONMENT: >-
+            CMAKE_ARGS="
+            -DFETCHCONTENT_SOURCE_DIR_PROTOBUF=/project/protobuf-${{ env.PROTOBUF_VERSION }}
+            -DONNX_CUSTOM_PROTOC_EXECUTABLE=/project/protoc-host/bin/protoc
+            -DONNX_HARDENING=ON
+            -DONNX_USE_LITE_PROTO=ON
+            -DONNX_WERROR=ON
+            "
           CIBW_TEST_SKIP: "*"
           CIBW_ENVIRONMENT_PASS_LINUX: |
             PIP_INDEX_URL
-            HTTPS_PROXY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: onnx-${{ github.sha }}-${{ matrix.os }}.zip
+          path: ./wheelhouse/*.whl
+
+  upload:
+    needs: [check, build]
+    runs-on: loongarch64-abi2.0
+    if: needs.check.outputs.build == 'true' && github.event_name != 'pull_request'
+
+    steps:
+      - name: Clean workspace
+        run: safe-rm -rf * .*
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: onnx-*
+          merge-multiple: true
+          path: dist
 
       - name: Upload wheels
-        if: ${{ env.SKIP != 'true' }}
         run: |
-          ls wheelhouse/*${{ matrix.python }}-${{ matrix.platform }}_*.whl || exit 1
-          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*${{ matrix.python }}-${{ matrix.platform }}_*.whl
+          ls dist/*.whl || exit 1
+          pip install twine==6.0.1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi dist/*.whl
         env:
-          TWINE_USERNAME: ${{ secrets.INDEX_NAME  }}
+          TWINE_USERNAME: ${{ secrets.INDEX_NAME }}
           TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}
