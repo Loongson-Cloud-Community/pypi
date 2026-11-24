@@ -1,0 +1,123 @@
+name: build apache-tvm-ffi wheel
+
+on:
+  schedule:
+    - cron: '0 17 * * *'
+  pull_request:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/apache-tvm-ffi.yaml"
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/apache-tvm-ffi.yaml"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'PyPI version to build'
+        required: false
+        default: 'latest'
+
+permissions:
+  contents: read
+
+env:
+  PACKAGE: apache-tvm-ffi
+
+jobs:
+  check:
+    name: Check if wheel exists
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - name: Check if exists
+        id: check
+        env:
+          INPUT_VERSION: ${{ inputs.version || 'latest' }}
+        run: |
+          pkg="${PACKAGE}"
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            version="${INPUT_VERSION}"
+          else
+            version="latest"
+          fi
+
+          url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
+          upstream_url="https://pypi.org/pypi/${pkg}/json"
+
+          if [[ "${version}" == latest ]]; then
+            version="$(curl -s "$upstream_url" | jq -r '.info.version')"
+          fi
+
+          if curl -Ls "$url" | grep -q "${pkg//-/_}-${version#v}-.*loongarch64"; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "${pkg} wheel already exists."
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "${pkg} wheel not found, continue building."
+          fi
+          echo "version=${version#v}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build apache-tvm-ffi wheels on ${{ matrix.os }}
+    needs: [check]
+    if: needs.check.outputs.build == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-24.04, arch: loongarch64, build: 'cp*-manylinux*'}
+    steps:
+      - name: Download PyPI source
+        uses: Loongson-Cloud-Community/pypi@main
+        with:
+          name: ${{ env.PACKAGE }}
+          version: ${{ needs.check.outputs.version }}
+
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Build wheel
+        uses: loong64/cibuildwheel@v4.1.1
+        env:
+          CIBW_ARCHS_LINUX: ${{ matrix.arch }}
+          CIBW_BUILD: ${{ matrix.build }}
+          CIBW_ENVIRONMENT_LINUX: >-
+            PIP_INDEX_URL=https://lpypi.loongnix.cn/loongson/pypi/+simple
+            PIP_EXTRA_INDEX_URL=https://pypi.org/simple
+            UV_INDEX_URL=https://lpypi.loongnix.cn/loongson/pypi/+simple
+            UV_EXTRA_INDEX_URL=https://pypi.org/simple
+          CIBW_TEST_SKIP: '*'
+          CIBW_BUILD_VERBOSITY: 1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cibw-wheels-${{ matrix.os }}-${{ matrix.arch }}-${{ strategy.job-index }}
+          path: ./wheelhouse/*.whl
+          if-no-files-found: error
+
+  upload:
+    needs: [check, build]
+    runs-on: loongarch64-abi2.0
+    if: needs.check.outputs.build == 'true' && github.event_name != 'pull_request'
+    steps:
+      - name: Clean workspace
+        run: safe-rm -rf * .*
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cibw-*
+          merge-multiple: true
+          path: dist
+
+      - name: Upload wheels
+        run: |
+          ls dist/*.whl || exit 1
+          pip install twine==6.0.1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi dist/*.whl
+        env:
+          TWINE_USERNAME: ${{ secrets.INDEX_NAME }}
+          TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}
