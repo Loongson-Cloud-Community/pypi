@@ -36,6 +36,7 @@ jobs:
     steps:
       - name: Check if exists
         id: check
+        shell: bash
         env:
           INPUT_VERSION: ${{ inputs.version || 'latest' }}
         run: |
@@ -50,10 +51,26 @@ jobs:
           upstream_url="https://pypi.org/pypi/${pkg}/json"
 
           if [[ "${version}" == latest ]]; then
-            version="$(curl -s "$upstream_url" | jq -r '.info.version')"
+            version="$(curl -fsSL --retry 3 "$upstream_url" | jq -er '.info.version')"
           fi
 
-          if curl -Ls "$url" | grep -q "${pkg}-${version#v}-.*loongarch64"; then
+          echo "Resolved version: ${version#v}"
+          index_file="${RUNNER_TEMP}/${pkg}-index.html"
+          http_status="$(curl -sSL --retry 3 --connect-timeout 15 --max-time 90 \
+            -o "$index_file" --write-out '%{http_code}' "$url")"
+          echo "Index HTTP status: ${http_status}"
+          case "$http_status" in
+            200) ;;
+            404) : > "$index_file" ;;
+            *)
+              echo "::error::Index request returned HTTP ${http_status}: ${url}"
+              exit 1
+              ;;
+          esac
+
+          # Consume the complete response before matching; grep -q can close a curl pipe early.
+          if grep -F "${pkg}-${version#v}-" "$index_file" |
+              grep -E 'manylinux.*loongarch64[.]whl' > /dev/null; then
             echo "build=false" >> "$GITHUB_OUTPUT"
             echo "${pkg} wheel already exists."
           else
