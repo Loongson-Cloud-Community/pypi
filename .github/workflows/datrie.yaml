@@ -1,16 +1,16 @@
 name: build datrie wheel
 
 on:
-  schedule:
-    - cron: '0 17 * * *'
-  pull_request:
-    branches: ["main"]
-    paths:
-      - ".github/workflows/datrie.yaml"
-  push:
-    branches: ["main"]
-    paths:
-      - ".github/workflows/datrie.yaml"
+  # schedule:
+    # - cron: '0 17 * * *'
+  # pull_request:
+    # branches: ["main"]
+    # paths:
+      # - ".github/workflows/datrie.yaml"
+  # push:
+    # branches: ["main"]
+    # paths:
+      # - ".github/workflows/datrie.yaml"
   workflow_dispatch:
     inputs:
       version:

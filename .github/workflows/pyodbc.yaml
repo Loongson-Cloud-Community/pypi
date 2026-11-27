@@ -1,16 +1,16 @@
 name: build pyodbc wheel
 
 on:
-  schedule:
-    - cron: '0 17 * * *'
-  pull_request:
-    branches: ["main"]
-    paths:
-      - ".github/workflows/pyodbc.yaml"
-  push:
-    branches: ["main"]
-    paths:
-      - ".github/workflows/pyodbc.yaml"
+  # schedule:
+    # - cron: '0 17 * * *'
+  # pull_request:
+    # branches: ["main"]
+    # paths:
+      # - ".github/workflows/pyodbc.yaml"
+  # push:
+    # branches: ["main"]
+    # paths:
+      # - ".github/workflows/pyodbc.yaml"
   workflow_dispatch:
     inputs:
       version:

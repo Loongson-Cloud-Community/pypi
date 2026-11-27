@@ -1,16 +1,16 @@
 name: sync pypdfium2 wheel
 
 on:
-  schedule:
-    - cron: '0 17 * * *'
-  pull_request:
-    branches: ["main"]
-    paths:
-      - ".github/workflows/pypdfium2.yaml"
-  push:
-    branches: ["main"]
-    paths:
-      - ".github/workflows/pypdfium2.yaml"
+  # schedule:
+    # - cron: '0 17 * * *'
+  # pull_request:
+    # branches: ["main"]
+    # paths:
+      # - ".github/workflows/pypdfium2.yaml"
+  # push:
+    # branches: ["main"]
+    # paths:
+      # - ".github/workflows/pypdfium2.yaml"
   workflow_dispatch:
     inputs:
       version:

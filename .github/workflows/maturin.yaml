@@ -1,16 +1,16 @@
 name: build maturin wheel
 
 on:
-  schedule:
-    - cron: '0 17 * * *'
-  pull_request:
-    branches: ["main"]
-    paths:
-      - ".github/workflows/maturin.yaml"
-  push:
-    branches: ["main"]
-    paths:
-      - ".github/workflows/maturin.yaml"
+  # schedule:
+    # - cron: '0 17 * * *'
+  # pull_request:
+    # branches: ["main"]
+    # paths:
+      # - ".github/workflows/maturin.yaml"
+  # push:
+    # branches: ["main"]
+    # paths:
+      # - ".github/workflows/maturin.yaml"
   workflow_dispatch:
     inputs:
       version:

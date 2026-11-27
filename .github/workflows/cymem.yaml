@@ -1,16 +1,16 @@
 name: build cymem wheel
 
 on:
-  schedule:
-    - cron: '0 17 * * *'
-  pull_request:
-    branches: ["main"]
-    paths:
-      - ".github/workflows/cymem.yaml"
-  push:
-    branches: ["main"]
-    paths:
-      - ".github/workflows/cymem.yaml"
+  # schedule:
+    # - cron: '0 17 * * *'
+  # pull_request:
+    # branches: ["main"]
+    # paths:
+      # - ".github/workflows/cymem.yaml"
+  # push:
+    # branches: ["main"]
+    # paths:
+      # - ".github/workflows/cymem.yaml"
   workflow_dispatch:
     inputs:
       version:

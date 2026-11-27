@@ -1,16 +1,16 @@
 name: build pybase16384 wheel
 
 on:
-  schedule:
-    - cron: '0 17 * * *'
-  pull_request:
-    branches: ["main"]
-    paths:
-      - ".github/workflows/pybase16384.yaml"
-  push:
-    branches: ["main"]
-    paths:
-      - ".github/workflows/pybase16384.yaml"
+  # schedule:
+    # - cron: '0 17 * * *'
+  # pull_request:
+    # branches: ["main"]
+    # paths:
+      # - ".github/workflows/pybase16384.yaml"
+  # push:
+    # branches: ["main"]
+    # paths:
+      # - ".github/workflows/pybase16384.yaml"
   workflow_dispatch:
 
 env:

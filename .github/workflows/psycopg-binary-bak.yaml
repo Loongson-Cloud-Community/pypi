@@ -1,12 +1,12 @@
 name: build psycopg-binary wheel
 
 on:
-  schedule:
-    - cron: '0 17 * * *'
-  push:
-    branches: ["main"]
-    paths:
-      - ".github/workflows/psycopg-binary.yaml"
+  # schedule:
+    # - cron: '0 17 * * *'
+  # push:
+    # branches: ["main"]
+    # paths:
+      # - ".github/workflows/psycopg-binary.yaml"
   workflow_dispatch:
     inputs:
       version:
