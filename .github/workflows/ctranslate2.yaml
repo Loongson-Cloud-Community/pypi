@@ -80,7 +80,7 @@ jobs:
       - name: Setup QEMU
         uses: docker/setup-qemu-action@v4
       - name: Build wheel
-        uses: loong64/cibuildwheel@v4.1.1
+        uses: loong64/cibuildwheel@v4.3.5
         env:
           CIBW_ARCHS_LINUX: loongarch64
           CIBW_BUILD: ${{ matrix.build }}
