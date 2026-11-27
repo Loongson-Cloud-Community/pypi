@@ -1,12 +1,12 @@
 name: 🧾 Update README & Docs (Bilingual + Package List)
 
 on:
-  schedule:
-    - cron: "0 3 * * *"
+  # schedule:
+    # - cron: "0 3 * * *"
   workflow_dispatch:
-  push:
-    paths:
-      - ".github/workflows/*.yaml"
+  # push:
+    # paths:
+      # - ".github/workflows/*.yaml"
 
 jobs:
   update-docs:

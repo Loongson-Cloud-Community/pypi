@@ -1,16 +1,16 @@
 name: build pymupdf wheel
 
 on:
-  schedule:
-    - cron: '0 17 * * *'
-  pull_request:
-    branches: ["main"]
-    paths:
-      - ".github/workflows/pymupdf.yaml"
-  push:
-    branches: ["main"]
-    paths:
-      - ".github/workflows/pymupdf.yaml"
+  # schedule:
+    # - cron: '0 17 * * *'
+  # pull_request:
+    # branches: ["main"]
+    # paths:
+      # - ".github/workflows/pymupdf.yaml"
+  # push:
+    # branches: ["main"]
+    # paths:
+      # - ".github/workflows/pymupdf.yaml"
   workflow_dispatch:
     inputs:
       version:

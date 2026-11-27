@@ -2,8 +2,8 @@ name: build numpy wheel
 
 
 on:
-  schedule:
-    - cron: '0 4 * * *'
+  # schedule:
+    # - cron: '0 4 * * *'
   workflow_dispatch:
     inputs:
       version:
