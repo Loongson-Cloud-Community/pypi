@@ -1,102 +1,138 @@
 name: build cryptography wheel
-
 on:
   schedule:
-    - cron: '0 17 * * *'
+    - cron: 0 17 * * *
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/cryptography.yaml
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/cryptography.yaml
   workflow_dispatch:
     inputs:
       version:
+        description: Version to build
         required: false
-        default: 'latest'
-
+        default: latest
+permissions:
+  contents: read
+env:
+  PACKAGE: cryptography
 jobs:
+  check:
+    name: Check if wheels exist
+    runs-on: ubuntu-24.04
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+      version: ${{ steps.check.outputs.version }}
+
+    steps:
+      - name: Check if wheel exists
+        id: check
+        uses: Loongson-Cloud-Community/check-wheel@main
+        with:
+          package: ${{ env.PACKAGE }}
+          version: ${{ inputs.version || 'latest' }}
   build:
-    name: Build cryptography ${{ matrix.platform }} wheel on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+    name: Build cryptography ${{ matrix.build }} wheels on Ubuntu
+    needs:
+      - check
+    if: needs.check.outputs.build == 'true'
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        os: [loongarch64-abi2.0]
-        platform: ["manylinux", "musllinux"]
-        PYTHON:
-          - { VERSION: "cp311", ABI_VERSION: 'py37' }
-          - { VERSION: "cp311", ABI_VERSION: 'py39' }
+        include:
+          - platform: manylinux
+            build: cp311-manylinux*
+            abi: abi3-py39
+            wheel_tag: cp39-abi3
+          - platform: manylinux
+            build: cp311-manylinux*
+            abi: abi3-py311
+            wheel_tag: cp311-abi3
+          - platform: manylinux
+            build: cp314t-manylinux*
+            abi: ''
+            wheel_tag: cp314-cp314t
+          - platform: manylinux
+            build: cp315t-manylinux*
+            abi: abi3t-py315
+            wheel_tag: cp315-abi3[.]abi3t
+          - platform: musllinux
+            build: cp311-musllinux*
+            abi: abi3-py39
+            wheel_tag: cp39-abi3
+          - platform: musllinux
+            build: cp311-musllinux*
+            abi: abi3-py311
+            wheel_tag: cp311-abi3
+          - platform: musllinux
+            build: cp314t-musllinux*
+            abi: ''
+            wheel_tag: cp314-cp314t
+          - platform: musllinux
+            build: cp315t-musllinux*
+            abi: abi3t-py315
+            wheel_tag: cp315-abi3[.]abi3t
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
     steps:
-      - name: Check if exists
-        run: |
-          pkg=cryptography
-
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
-            version="latest"
-          else
-            version="${{ github.event.inputs.version }}"
-          fi
-
-          platform="${{ matrix.platform }}"
-          abi_version="${{ matrix.PYTHON.ABI_VERSION }}"
-          url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
-          upstream_url="https://pypi.org/pypi/${pkg}/json"
-
-          if [[ "${abi_version}" == "py37" ]]; then
-            abi_version=cp37
-          else
-            abi_version=cp39
-          fi
-
-          if [[ "${version}" == "latest" ]]; then
-            version="$(curl -s ${upstream_url} | jq -r '.info.version')"
-          fi
-
-
-          if curl -s ${url} | grep -q ${pkg}-${version}-${abi_version}.*${platform}.*loongarch64; then
-            echo "SKIP=true" >> $GITHUB_ENV
-            echo "${platform} wheels already exists."
-          else
-            echo "SKIP=false" >> $GITHUB_ENV
-            echo "${platform} wheels not found, continue building"
-          fi
-
-          echo "VERSION=${version}" >> $GITHUB_ENV
-
-      - name: Clean workspace
-        if: ${{ env.SKIP != 'true' }}
-        run: |
-          safe-rm -rf * .*
-
-      - name: Download source
-        if: ${{ env.SKIP != 'true' }}
+      - name: Download PyPI source
         uses: Loongson-Cloud-Community/pypi@main
         with:
-          name: cryptography
-          version: ${{ env.VERSION }}
-
+          name: ${{ env.PACKAGE }}
+          version: ${{ needs.check.outputs.version }}
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v4
       - name: Build wheel
-        if: ${{ env.SKIP != 'true' }}
-        run: |
-          pip3 install -i https://lpypi.loongnix.cn/loongson/pypi/+simple cibuildwheel==2.22.0
-          cibuildwheel
+        uses: loong64/cibuildwheel@v4.1.1
         env:
-          PIP_EXTRA_INDEX_URL: "https://lpypi.loongnix.cn/loongson/pypi/+simple"
-          PIP_INDEX_URL: "https://pypi.tuna.tsinghua.edu.cn/simple"
-          CIBW_ARCHS: "loongarch64"
-          CIBW_BUILD: "${{ matrix.PYTHON.VERSION }}-*"
-          CIBW_BUILD_FRONTEND: "build[uv]"
-          CIBW_CONFIG_SETTINGS: "build-args=--features=pyo3/abi3-${{ matrix.PYTHON.ABI_VERSION }}"
-          CIBW_ENVIRONMENT_LINUX: >
-            OPENSSL_DIR="/opt/pyca/cryptography/openssl"
-            OPENSSL_STATIC=1
-            RUSTUP_HOME="/root/.rustup"
-          CIBW_ENVIRONMENT_PASS_LINUX: >
-            PIP_INDEX_URL
-            PIP_EXTRA_INDEX_URL
-          CIBW_MANYLINUX_LOONGARCH64_IMAGE: "ghcr.io/loong64/cryptography-manylinux_2_38:loongarch64"
-          CIBW_MUSLLINUX_LOONGARCH64_IMAGE: "ghcr.io/loong64/cryptography-musllinux_1_2:loongarch64"
-
+          CIBW_ARCHS_LINUX: loongarch64
+          CIBW_BUILD: ${{ matrix.build }}
+          PIP_INDEX_URL: https://lpypi.loongnix.cn/loongson/pypi/+simple
+          PIP_EXTRA_INDEX_URL: https://pypi.org/simple
+          UV_INDEX_URL: https://lpypi.loongnix.cn/loongson/pypi/+simple
+          UV_EXTRA_INDEX_URL: https://pypi.org/simple
+          CIBW_ENVIRONMENT_PASS_LINUX: PIP_INDEX_URL PIP_EXTRA_INDEX_URL UV_INDEX_URL UV_EXTRA_INDEX_URL
+          CIBW_BUILD_FRONTEND: build[uv]
+          CIBW_ENABLE: cpython-prerelease
+          CIBW_CONFIG_SETTINGS: ${{ matrix.abi && format('build-args=--features=pyo3/{0}', matrix.abi) || '' }}
+          CIBW_ENVIRONMENT_LINUX: OPENSSL_DIR=/opt/pyca/cryptography/openssl OPENSSL_STATIC=1 RUSTUP_HOME=/root/.rustup
+            CARGO_BUILD_JOBS=2
+          CIBW_MANYLINUX_LOONGARCH64_IMAGE: ghcr.io/loong64/cryptography-manylinux_2_38:loongarch64
+          CIBW_MUSLLINUX_LOONGARCH64_IMAGE: ghcr.io/loong64/cryptography-musllinux_1_2:loongarch64
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cibw-${{ matrix.platform }}-${{ strategy.job-index }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+  upload:
+    needs:
+      - check
+      - build
+    runs-on: loongarch64-abi2.0
+    if: needs.check.outputs.build == 'true' && github.event_name != 'pull_request'
+    steps:
+      - name: Clean workspace
+        run: |
+          safe-rm -rf * .*
+      - name: Download wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cibw-*
+          merge-multiple: true
+          path: dist
       - name: Upload wheels
-        if: ${{ env.SKIP != 'true' }}
-        run: |
-          ls wheelhouse/*-${{ matrix.platform }}_*.whl || exit 1
-          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*-${{ matrix.platform }}_*.whl
         env:
-          TWINE_USERNAME: ${{ secrets.INDEX_NAME  }}
+          TWINE_USERNAME: ${{ secrets.INDEX_NAME }}
           TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}
+        run: |
+          ls dist/*.whl || exit 1
+          pip install twine==6.0.1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi dist/*.whl

@@ -1,113 +1,117 @@
 name: build apache-tvm wheel
-
 on:
   schedule:
-    - cron: '0 17 * * *'
+    - cron: 0 17 * * *
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/apache-tvm.yaml
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/apache-tvm.yaml
   workflow_dispatch:
     inputs:
       version:
+        description: Version to build
         required: false
-        default: 'latest'
-
+        default: latest
+permissions:
+  contents: read
+env:
+  PACKAGE: apache-tvm
 jobs:
+  check:
+    name: Check if wheels exist
+    runs-on: ubuntu-24.04
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+      version: ${{ steps.check.outputs.version }}
+
+    steps:
+      - name: Check if wheel exists
+        id: check
+        uses: Loongson-Cloud-Community/check-wheel@main
+        with:
+          package: ${{ env.PACKAGE }}
+          version: ${{ inputs.version || 'latest' }}
   build:
-    name: Build apache-tvm ${{ matrix.python }} ${{ matrix.platform }} wheel on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+    name: Build apache-tvm ${{ matrix.build }} wheels on Ubuntu
+    needs:
+      - check
+    if: needs.check.outputs.build == 'true'
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        os: [loongarch64-abi2.0]
-        platform: ["manylinux"]
-        python: ["cp38", "cp39", "cp310", "cp311", "cp312", "cp313"]
+        include:
+          - platform: manylinux
+            build: cp310-manylinux*
+            wheel_tag: py3-none
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
     steps:
-      - name: Check if exists
-        run: |
-          pkg=tvm
-
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
-            version="latest"
-          else
-            version="${{ github.event.inputs.version }}"
-          fi
-
-          platform="${{ matrix.platform }}"
-          python_tag="${{ matrix.python }}"
-          repo="apache/${pkg}"
-          url="https://lpypi.loongnix.cn/loongson/pypi/+simple/apache-${pkg}/"
-          upstream_url="https://api.github.com/repos/${repo}/releases/latest"
-
-          if [[ "${version}" == "latest" ]]; then
-            version="$(curl -s "${upstream_url}" | jq -r ".tag_name")"
-          fi
-
-          if curl -Ls ${url} | grep -q apache_tvm-${version#v}-.*-${python_tag}-${platform}.*loongarch64; then
-            echo "SKIP=true" >> $GITHUB_ENV
-            echo "${pkg}-${version#v}-${python_tag}-${platform} wheel already exists."
-          else
-            echo "SKIP=false" >> $GITHUB_ENV
-            echo "${pkg}-${version#v}-${python_tag}-${platform} wheel not found, continue building."
-          fi
-
-          echo "VERSION=${version}" >> $GITHUB_ENV
-          echo "REPO=${repo}" >> $GITHUB_ENV
-
-      - name: Clean workspace
-        if: ${{ env.SKIP != 'true' }}
-        run: |
-          safe-rm -rf * .*
-
       - name: Download source
-        if: ${{ env.SKIP != 'true' }}
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.REPO }}
-          ref: ${{ env.VERSION }}
+          repository: apache/tvm
+          ref: v${{ needs.check.outputs.version }}
           submodules: recursive
           fetch-depth: 0
-
-      - name: Patch source
-        if: ${{ env.SKIP != 'true' }}
-        run: |
-          curl -sL -o 3rdparty/libbacktrace/config.guess "https://git.savannah.gnu.org/gitweb/?p=config.git;a=blob_plain;f=config.guess"
-          curl -sL -o 3rdparty/libbacktrace/config.sub "https://git.savannah.gnu.org/gitweb/?p=config.git;a=blob_plain;f=config.sub"
-          sed -i 's/name="tvm/name="apache-tvm/g' python/setup.py
-          rm -rf build && mkdir build
-
+          persist-credentials: false
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v4
       - name: Build wheel
-        if: ${{ env.SKIP != 'true' }}
-        run: |
-          pip3 install -i https://lpypi.loongnix.cn/loongson/pypi/+simple cibuildwheel==2.22.0 
-          cibuildwheel python/
+        uses: loong64/cibuildwheel@v4.1.1
         env:
-          CIBW_ARCHS: "loongarch64"
-          CIBW_BUILD: "${{ matrix.python }}-${{ matrix.platform }}_loongarch64"
-          CIBW_TEST_SKIP: "*"
-          CIBW_ENVIRONMENT_LINUX: |
-            TVM_LIBRARY_PATH="$(realpath build)"
-            PIP_INDEX_URL="https://lpypi.loongnix.cn/loongson/pypi/+simple"
-            PIP_EXTRA_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
-          CIBW_BEFORE_ALL: |
-            yum install -y llvm llvm-devel
-            pip install cython
-            cd build
-            cp ../cmake/config.cmake .
-            echo "set(CMAKE_BUILD_TYPE Release)" >> config.cmake
-            echo "set(USE_LLVM \"llvm-config --ignore-libllvm --link-static\")" >> config.cmake
-            echo "set(HIDE_PRIVATE_SYMBOLS ON)" >> config.cmake
-            echo "set(USE_CUDA   OFF)" >> config.cmake
-            echo "set(USE_METAL  OFF)" >> config.cmake
-            echo "set(USE_VULKAN OFF)" >> config.cmake
-            echo "set(USE_OPENCL OFF)" >> config.cmake
-            echo "set(USE_CUBLAS OFF)" >> config.cmake
-            echo "set(USE_CUDNN  OFF)" >> config.cmake
-            echo "set(USE_CUTLASS OFF)" >> config.cmake
-            cmake .. && cmake --build . --parallel $(nproc)
-
+          CIBW_ARCHS_LINUX: loongarch64
+          CIBW_BUILD: ${{ matrix.build }}
+          PIP_INDEX_URL: https://lpypi.loongnix.cn/loongson/pypi/+simple
+          PIP_EXTRA_INDEX_URL: https://pypi.org/simple
+          UV_INDEX_URL: https://lpypi.loongnix.cn/loongson/pypi/+simple
+          UV_EXTRA_INDEX_URL: https://pypi.org/simple
+          CIBW_ENVIRONMENT_PASS_LINUX: PIP_INDEX_URL PIP_EXTRA_INDEX_URL UV_INDEX_URL UV_EXTRA_INDEX_URL
+          CIBW_BEFORE_ALL_LINUX: |
+            if ! command -v llvm-config > /dev/null; then
+              if command -v apt-get > /dev/null; then
+                apt-get update && apt-get install -y llvm-dev
+              else
+                yum install -y llvm llvm-devel
+              fi
+            fi
+            llvm-config --version
+          CIBW_ENVIRONMENT_LINUX: CMAKE_ARGS="-DUSE_LLVM='llvm-config --link-static' -DHIDE_PRIVATE_SYMBOLS=ON"
+            CMAKE_BUILD_PARALLEL_LEVEL=2
+          CIBW_TEST_SKIP: '*'
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cibw-${{ matrix.platform }}-${{ strategy.job-index }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+  upload:
+    needs:
+      - check
+      - build
+    runs-on: loongarch64-abi2.0
+    if: needs.check.outputs.build == 'true' && github.event_name != 'pull_request'
+    steps:
+      - name: Clean workspace
+        run: |
+          safe-rm -rf * .*
+      - name: Download wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cibw-*
+          merge-multiple: true
+          path: dist
       - name: Upload wheels
-        if: ${{ env.SKIP != 'true' }}
-        run: |
-          ls wheelhouse/*-${{ matrix.platform }}_*.whl || exit 1
-          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi wheelhouse/*-${{ matrix.platform }}_*.whl
         env:
-          TWINE_USERNAME: ${{ secrets.INDEX_NAME  }}
+          TWINE_USERNAME: ${{ secrets.INDEX_NAME }}
           TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}
+        run: |
+          ls dist/*.whl || exit 1
+          pip install twine==6.0.1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi dist/*.whl
