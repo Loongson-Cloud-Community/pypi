@@ -1,96 +1,130 @@
 name: build ctranslate2 wheel
-
 on:
   schedule:
-    - cron: '0 17 * * *'
+    - cron: 0 17 * * *
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/ctranslate2.yaml
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/ctranslate2.yaml
   workflow_dispatch:
     inputs:
       version:
+        description: Version to build
         required: false
-        default: 'latest'
-
+        default: latest
+permissions:
+  contents: read
+env:
+  PACKAGE: ctranslate2
 jobs:
+  check:
+    name: Check if wheels exist
+    runs-on: ubuntu-24.04
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+      version: ${{ steps.check.outputs.version }}
+
+    steps:
+      - name: Check if wheel exists
+        id: check
+        uses: Loongson-Cloud-Community/check-wheel@main
+        with:
+          package: ${{ env.PACKAGE }}
+          version: ${{ inputs.version || 'latest' }}
   build:
-    name: Build ctranslate2 wheel on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+    name: Build ctranslate2 ${{ matrix.build }} wheels on Ubuntu
+    needs:
+      - check
+    if: needs.check.outputs.build == 'true'
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: loongarch64-abi2.0
-            arch: loongarch64
-            opt_level: generic
+          - platform: manylinux
+            build: cp*-manylinux*
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
     steps:
-      - name: Check if exists
-        run: |
-          pkg=ctranslate2
-
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
-            version="latest"
-          else
-            version="${{ github.event.inputs.version }}"
-          fi
-
-          url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
-          upstream_url="https://pypi.org/pypi/${pkg}/json"
-
-          if [[ "${version}" == "latest" ]]; then
-            version="$(curl -s ${upstream_url} | jq -r '.info.version')"
-          fi
-
-          if curl -Ls ${url} | grep -q ctranslate2-${version}-.*loongarch64; then
-            echo "SKIP=true" >> $GITHUB_ENV
-            echo "${pkg} wheels already exists."
-          else
-            echo "SKIP=false" >> $GITHUB_ENV
-            echo "${pkg} wheels not found, continue building"
-          fi
-
-          echo "VERSION=v${version}" >> $GITHUB_ENV
-
-      - name: Clean workspace
-        if: ${{ env.SKIP != 'true' }}
-        run: |
-          safe-rm -rf * .*
-
       - name: Download source
-        if: ${{ env.SKIP != 'true' }}
         uses: actions/checkout@v4
         with:
           repository: OpenNMT/CTranslate2
-          ref: ${{ env.VERSION }}
-          submodules: true
+          ref: v${{ needs.check.outputs.version }}
+          submodules: recursive
           fetch-depth: 1
-      
-      - name: Apply patch
+          persist-credentials: false
+      - name: Adapt the upstream CPU build for LoongArch
         run: |
-          wget -qO - https://raw.githubusercontent.com/Loongson-Cloud-Community/CTranslate2/refs/heads/dev/0001-add-loong64-support.patch | patch -p1
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          import re
 
-      - name: Build wheel 🛠️
-        uses: yzewei/cibuildwheel@v2.22.0
-        if: ${{ env.SKIP != 'true' }}
-        with:
-          package-dir: python
-          output-dir: python/wheelhouse
+          path = Path('python/tools/prepare_build_environment_linux.sh')
+          script = path.read_text()
+          branch = 'if [ "$CIBW_ARCHS" == "aarch64" ]; then'
+          assert script.count(branch) == 2, 'Upstream CPU build branches changed'
+          script = script.replace(branch, 'if [ "$CIBW_ARCHS" == "loongarch64" ]; then')
+          script = re.sub(r'^pip install "cmake==[^\"]+"\n', '', script, flags=re.MULTILINE)
+          script = script.replace('TARGET=ARMV8', 'TARGET=LOONGSON3R5 NUM_THREADS=32 NUM_PARALLEL=8')
+          script = script.replace('-DWITH_RUY=ON', '-DWITH_RUY=OFF -DENABLE_CPU_DISPATCH=OFF')
+          script = script.replace('-j$(nproc)', '-j"${CMAKE_BUILD_PARALLEL_LEVEL:-2}"')
+          path.write_text(script)
+          PYTHON
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v4
+      - name: Build wheel
+        uses: loong64/cibuildwheel@v4.1.1
         env:
-          LD_LIBRARY_PATH: ${{ github.workspace }}/python:${{ env.LD_LIBRARY_PATH }}
+          CIBW_ARCHS_LINUX: loongarch64
+          CIBW_BUILD: ${{ matrix.build }}
+          PIP_INDEX_URL: https://lpypi.loongnix.cn/loongson/pypi/+simple
+          PIP_EXTRA_INDEX_URL: https://pypi.org/simple
+          UV_INDEX_URL: https://lpypi.loongnix.cn/loongson/pypi/+simple
+          UV_EXTRA_INDEX_URL: https://pypi.org/simple
+          CIBW_ENVIRONMENT_PASS_LINUX: PIP_INDEX_URL PIP_EXTRA_INDEX_URL UV_INDEX_URL UV_EXTRA_INDEX_URL CIBW_ARCHS
+          CIBW_ARCHS: loongarch64
           CIBW_BEFORE_ALL_LINUX: python/tools/prepare_build_environment_linux.sh
           CIBW_BEFORE_BUILD: pip install -r python/install_requirements.txt
-          CIBW_SKIP: pp* *-musllinux_*
-          PIP_INDEX_URL: "https://pypi.tuna.tsinghua.edu.cn/simple"
-          PIP_EXTRA_INDEX_URL: "https://lpypi.loongnix.cn/loongson/pypi/+simple"
-          CIBW_ARCHS: ${{ matrix.arch }}
-          CIBW_TEST_SKIP: "*"
-          CIBW_ENVIRONMENT_PASS_LINUX: >
-            CIBW_ARCHS
-            PIP_INDEX_URL
-            PIP_EXTRA_INDEX_URL
-
-      - name: Upload wheels
-        if: ${{ env.SKIP != 'true' }}
+          CIBW_ENVIRONMENT_LINUX: CTRANSLATE2_ROOT=/usr/local LD_LIBRARY_PATH="/usr/local/lib64:/usr/local/lib:$LD_LIBRARY_PATH"
+            CMAKE_BUILD_PARALLEL_LEVEL=2
+          CIBW_TEST_SKIP: '*'
+        with:
+          package-dir: python
+          output-dir: wheelhouse
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cibw-${{ matrix.platform }}-${{ strategy.job-index }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+  upload:
+    needs:
+      - check
+      - build
+    runs-on: loongarch64-abi2.0
+    if: needs.check.outputs.build == 'true' && github.event_name != 'pull_request'
+    steps:
+      - name: Clean workspace
         run: |
-          ls python/wheelhouse/*.whl || exit 1
-          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi python/wheelhouse/*.whl
+          safe-rm -rf * .*
+      - name: Download wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cibw-*
+          merge-multiple: true
+          path: dist
+      - name: Upload wheels
         env:
-          TWINE_USERNAME: ${{ secrets.INDEX_NAME  }}
+          TWINE_USERNAME: ${{ secrets.INDEX_NAME }}
           TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}
+        run: |
+          ls dist/*.whl || exit 1
+          pip install twine==6.0.1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi dist/*.whl

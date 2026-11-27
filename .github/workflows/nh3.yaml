@@ -1,165 +1,169 @@
 name: build nh3 wheel
-
 on:
   schedule:
-    - cron: '0 17 * * *'
+    - cron: 0 17 * * *
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/nh3.yaml
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/nh3.yaml
   workflow_dispatch:
     inputs:
       version:
+        description: PyPI version to build
         required: false
-        default: 'latest'
-
+        default: latest
+permissions:
+  contents: read
 env:
-  PACKAGE_NAME: nh3
-
+  PACKAGE: nh3
 jobs:
-  check-wheel-exists:
-    name: Check if exists
-    runs-on: loongarch64-abi2.0
+  check:
+    name: Check if wheels exist
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.check.outputs.version }}
-      build_manylinux: ${{ steps.check.outputs.build_manylinux }}
-      build_musllinux: ${{ steps.check.outputs.build_musllinux }}
+      build: ${{ steps.check.outputs.build }}
+
     steps:
-      - name: Check if wheels exist
+      - name: Check if wheel exists
         id: check
-        run: |
-          pkg=${{ env.PACKAGE_NAME }}
-
-          check_wheel() {
-            local tag=$1
-
-            if curl -Ls "${url}" | grep -q "${pkg}-${version}.*${tag}.*loongarch64"; then
-              echo "build_${tag}=false" >> $GITHUB_OUTPUT
-              echo "${tag} wheel already exists."
-            else
-              echo "build_${tag}=true" >> $GITHUB_OUTPUT
-              echo "${tag} wheel not found, continue building."
-            fi
-
-          }
-
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
-            version="latest"
-          else
-            version="${{ github.event.inputs.version }}"
-          fi
-
-          url="https://lpypi.loongnix.cn/loongson/pypi/+simple/${pkg}/"
-          upstream_url="https://pypi.org/pypi/${pkg}/json"
-
-          if [[ "${version}" == "latest" ]]; then
-            version="$(curl -s ${upstream_url} | jq -r '.info.version')"
-          fi
-
-          echo "version=${version}" >> $GITHUB_OUTPUT
-
-          for tag in manylinux musllinux; do
-            check_wheel "$tag"
-          done
-
-  debug:
-    name: Debug outputs
-    needs: check-wheel-exists
-    runs-on: loongarch64-abi2.0
-    steps:
-      - run: |
-          echo "build_manylinux=${{ needs.check-wheel-exists.outputs.build_manylinux }}"
-          echo "build_musllinux=${{ needs.check-wheel-exists.outputs.build_musllinux }}"
-
-  download:
-    name: Download source
-    needs: check-wheel-exists
-    env:
-      version: ${{ needs.check-wheel-exists.outputs.version }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [loongarch64-abi2.0]
-    if: ${{ needs.check-wheel-exists.outputs.build_manylinux == 'true' || needs.check-wheel-exists.outputs.build_musllinux == 'true' }}
-    steps:
-      - name: Clean workspace
-        run: safe-rm -rf * .*
-
-      - name: Download source
-        uses: Loongson-Cloud-Community/pypi@main
+        uses: Loongson-Cloud-Community/check-wheel@main
         with:
-          name: ${{ env.PACKAGE_NAME }}
-          version: ${{ env.version }}
-        
+          package: ${{ env.PACKAGE }}
+          version: ${{ inputs.version || 'latest' }}
   build:
-    name: Build nh3 ${{ matrix.platform }} wheel on ${{ matrix.os }}
-    needs: [check-wheel-exists, download]
-    runs-on: ${{ matrix.os }}
+    name: Build nh3 ${{ matrix.platform }} ${{ matrix.variant }} wheel
+    needs:
+      - check
+    if: needs.check.outputs.build == 'true'
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: loongarch64-abi2.0
-            image: "lcr.loongnix.cn/pypa/manylinux_2_38_loongarch64"
-            target: "loongarch64-unknown-linux-gnu"
-            platform: "manylinux_2_38"
-          - os: loongarch64-abi2.0
-            image: "lcr.loongnix.cn/pypa/musllinux_1_2_loongarch64"
-            target: "loongarch64-unknown-linux-musl"
-            platform: "musllinux_1_2"
-    container:
-      image: ${{ matrix.image }}
-      env:
-        RUSTUP_HOME: /root/.rustup
-        CARGO_HOME: /root/.cargo
-        HTTPS_PROXY: ${{ secrets.PROXY_URL }}
-        PIPX_DEFAULT_PYTHON: /usr/local/bin/python3.12
-        SKIP: true
+          - platform: manylinux
+            target: loongarch64-unknown-linux-gnu
+            manylinux: '2_36'
+            test_image: ghcr.io/loong64/manylinux_2_38_loongarch64
+            variant: abi3
+            wheel_tag: cp39-abi3
+            interpreter: python3.12
+            test_python: cp312-cp312
+          - platform: manylinux
+            target: loongarch64-unknown-linux-gnu
+            manylinux: '2_36'
+            test_image: ghcr.io/loong64/manylinux_2_38_loongarch64
+            variant: cp314t
+            wheel_tag: cp314-cp314t
+            interpreter: python3.14t
+            test_python: cp314-cp314t
+          - platform: manylinux
+            target: loongarch64-unknown-linux-gnu
+            manylinux: '2_36'
+            test_image: ghcr.io/loong64/manylinux_2_38_loongarch64
+            variant: cp315t
+            wheel_tag: cp315-cp315t
+            interpreter: python3.15t
+            test_python: cp315-cp315t
+          - platform: musllinux
+            target: loongarch64-unknown-linux-musl
+            manylinux: musllinux_1_2
+            test_image: ghcr.io/loong64/musllinux_1_2_loongarch64
+            variant: abi3
+            wheel_tag: cp39-abi3
+            interpreter: python3.12
+            test_python: cp312-cp312
+          - platform: musllinux
+            target: loongarch64-unknown-linux-musl
+            manylinux: musllinux_1_2
+            test_image: ghcr.io/loong64/musllinux_1_2_loongarch64
+            variant: cp314t
+            wheel_tag: cp314-cp314t
+            interpreter: python3.14t
+            test_python: cp314-cp314t
+          - platform: musllinux
+            target: loongarch64-unknown-linux-musl
+            manylinux: musllinux_1_2
+            test_image: ghcr.io/loong64/musllinux_1_2_loongarch64
+            variant: cp315t
+            wheel_tag: cp315-cp315t
+            interpreter: python3.15t
+            test_python: cp315-cp315t
     steps:
-      - name: Check if wheel exists
-        if: |
-          ${{ (matrix.platform == 'manylinux_2_38' && needs.check-wheel-exists.outputs.build_manylinux == 'true') || (matrix.platform  == 'musllinux_1_2' && needs.check-wheel-exists.outputs.build_musllinux == 'true') }}
-        run:
-          echo "SKIP=false" >> $GITHUB_ENV
-
-      - name: Install dependence
-        if: ${{ env.SKIP != 'true' }}
-        run: |
-          if command -v yum &> /dev/null; then
-            yum update -y && yum install -y libatomic
-          fi
-
-      - name: Setup rust-toolchain
-        if: ${{ env.SKIP != 'true' }}
-        run: |
-          curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
-          echo "/root/.cargo/bin" >> $GITHUB_PATH
-
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Download PyPI source
+        uses: Loongson-Cloud-Community/pypi@main
+        with:
+          name: ${{ env.PACKAGE }}
+          version: ${{ needs.check.outputs.version }}
       - name: Build wheel
-        if: ${{ env.SKIP != 'true' }}
+        uses: PyO3/maturin-action@v1
+        with:
+          rust-toolchain: nightly
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          args: --release --locked --out dist -i ${{ matrix.interpreter }}
+          sccache: true
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v4
+      - name: Install and test the built wheel
+        shell: bash
         run: |
-          pipx install maturin --pip-args="--only-binary=:all:" --force
-          maturin build --release --out dist --target ${{ matrix.target }} --compatibility ${{ matrix.platform }}
+          docker run --rm --platform linux/loong64 \
+            --volume "$PWD:/io" --workdir /io \
+            --env TEST_PYTHON="${{ matrix.test_python }}" \
+            --env PIP_INDEX_URL=https://lpypi.loongnix.cn/loongson/pypi/+simple \
+            --env PIP_EXTRA_INDEX_URL=https://pypi.org/simple \
+            "${{ matrix.test_image }}" \
+            bash -e -o pipefail -c '
+              if command -v yum > /dev/null; then
+                yum install -y libatomic
+              elif command -v apt-get > /dev/null; then
+                apt-get update && apt-get install -y libatomic1
+              elif command -v apk > /dev/null; then
+                apk add --no-cache libatomic
+              fi
+              python="/opt/python/${TEST_PYTHON}/bin/python"
+              "$python" -m venv /tmp/nh3-test
+              /tmp/nh3-test/bin/python -m pip install --no-index --find-links=/io/dist nh3
+              /tmp/nh3-test/bin/python -m pip install pytest
+              /tmp/nh3-test/bin/python -m pytest
+            '
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nh3-${{ matrix.platform }}-${{ matrix.variant }}
+          path: dist/*.whl
+          if-no-files-found: error
+  upload:
+    needs:
+      - check
+      - build
+    if: needs.check.outputs.build == 'true' && github.event_name != 'pull_request'
+    runs-on: loongarch64-abi2.0
+    steps:
+      - name: Clean workspace
+        run: safe-rm -rf * .*
+      - name: Download wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: nh3-*
+          merge-multiple: true
+          path: dist
+      - name: Upload wheels
         env:
-          PIP_INDEX_URL: "https://lpypi.loongnix.cn/loongson/pypi/+simple"
-
-      - name: Build free-threaded wheels
-        if: ${{ env.SKIP != 'true' }}
-        run: |
-          maturin build --release --out dist -i python3.13t --target ${{ matrix.target }} --compatibility ${{ matrix.platform }}
-
-      - name: Test wheel
-        if: ${{ env.SKIP != 'true' }}
-        run: |
-          export PATH="/opt/python/cp312-cp312/bin:$PATH"
-          pip install nh3 --no-index --find-links dist --force-reinstall
-          pip install pytest
-          cd tests && pytest
-
-      - name: Upload wheel
-        if: ${{ env.SKIP != 'true' }}
-        run: |
-          ls dist/${{ env.PACKAGE_NAME }}*${{ matrix.platform }}*.whl || exit 1
-          pipx install twine
-          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi dist/${{ env.PACKAGE_NAME }}*${{ matrix.platform }}*.whl
-        env:
-          PIP_INDEX_URL: "https://lpypi.loongnix.cn/loongson/pypi/+simple"
-          TWINE_USERNAME: ${{ secrets.INDEX_NAME  }}
+          TWINE_USERNAME: ${{ secrets.INDEX_NAME }}
           TWINE_PASSWORD: ${{ secrets.INDEX_TOKEN }}
+        run: |
+          ls dist/nh3-*.whl || exit 1
+          pip install twine==6.0.1
+          twine upload --repository-url https://lpypi.loongnix.cn/loongson/pypi dist/nh3-*.whl
